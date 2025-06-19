@@ -232,11 +232,18 @@ def create_analysis_section(df, group_cols, metrics_config, title, key_prefix, m
                 if len(trend['data'].unique()) > 1:
                     st.subheader("📈 Análise de Crescimento")
                     
+                    # Remover linhas de total se existirem
+                    if 'Grupo' in trend.columns and 'TOTAL GERAL' in trend['Grupo'].values:
+                        trend = trend[trend['Grupo'] != 'TOTAL GERAL']
+                    if color_col in trend.columns and 'TOTAL GERAL' in trend[color_col].values:
+                        trend = trend[trend[color_col] != 'TOTAL GERAL']
+                    
                     # Calcular crescimento
                     growth_data = []
                     for group in trend[color_col].unique():
                         group_data = trend[trend[color_col] == group].copy()
-                        if len(group_data) > 1:
+                        # Só calcula crescimento se houver pelo menos 2 datas distintas
+                        if len(group_data['data'].unique()) > 1:
                             group_data = group_data.sort_values('data')
                             first_value = group_data[selected_metric].iloc[0]
                             last_value = group_data[selected_metric].iloc[-1]
@@ -522,18 +529,19 @@ if uploaded_files:
         
         # Formatação
         format_dict = {}
-        if 'Ad Requests' in consolidado_display.columns:
-            format_dict['Ad Requests'] = "{:,.0f}"
-        if 'Match Rate (%)' in consolidado_display.columns:
-            format_dict['Match Rate (%)'] = "{:.2f}%"
-        if 'eCPM (US$)' in consolidado_display.columns:
-            format_dict['eCPM (US$)'] = "US$ {:.2f}"
-        if 'CPC (US$)' in consolidado_display.columns:
-            format_dict['CPC (US$)'] = "US$ {:.2f}"
-        if 'CTR (%)' in consolidado_display.columns:
-            format_dict['CTR (%)'] = "{:.2f}%"
-        if 'Viewability (%)' in consolidado_display.columns:
-            format_dict['Viewability (%)'] = "{:.2f}%"
+        for col in consolidado_display.columns:
+            if col == 'utm_source':
+                continue  # Pula coluna de texto
+                
+            if pd.api.types.is_numeric_dtype(consolidado_display[col]):
+                if 'Ad Requests' in col:
+                    format_dict[col] = "{:,.0f}"
+                elif 'Match Rate (%)' in col or 'CTR (%)' in col or 'Viewability (%)' in col:
+                    format_dict[col] = "{:.2f}%"
+                elif 'eCPM (US$)' in col or 'CPC (US$)' in col:
+                    format_dict[col] = "US$ {:.2f}"
+                else:
+                    format_dict[col] = "{:.2f}"
         
         st.dataframe(
             consolidado_display.style.format(format_dict),
