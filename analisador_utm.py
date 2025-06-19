@@ -165,10 +165,20 @@ def create_analysis_section(df, group_cols, metrics_config, title, key_prefix, m
                 color_col = group_cols[1] if len(group_cols) > 1 else group_cols[0]
                 df_graph = df.copy()
             
+            # Escolher agregação correta para a métrica selecionada
+            metricas_soma = [
+                'ad exchange ad requests',
+                'ad exchange revenue ($)'
+            ]
+            if selected_metric.lower() in metricas_soma:
+                agg_func = 'sum'
+            else:
+                agg_func = 'mean'
+            
             trend = calculate_metrics_safely(
                 df_graph,
                 group_by_cols,
-                {selected_metric: 'sum'}
+                {selected_metric: agg_func}
             )
             
             if not trend.empty:
