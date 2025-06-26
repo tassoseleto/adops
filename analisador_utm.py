@@ -17,7 +17,7 @@ def load_and_process_data(uploaded_files_info):
     
     for file_info in uploaded_files_info:
         # Simula o carregamento - na prática, você precisará ajustar isso
-        df = pd.read_csv(file_info['name'])
+        df = pd.read_csv(file_info['name'], thousands=',')
         df['source_file'] = file_info['basename']
         all_data.append(df)
     
@@ -27,7 +27,8 @@ def load_and_process_data(uploaded_files_info):
     df.columns = [c.strip().lower() for c in df.columns]
     df.rename(columns={
         'channel': 'utm_source',
-        'date': 'data'
+        'date': 'data',
+        'ad exchange active view viewable impression': 'ad exchange active view viewable impressions'
     }, inplace=True)
     
     # Conversão de data
@@ -35,20 +36,23 @@ def load_and_process_data(uploaded_files_info):
     
     # Processamento de métricas numéricas
     metricas_numericas = [
+        'ad exchange impressions',
+        'ad exchange clicks',
+        'ad exchange revenue ($)',
         'ad exchange ad requests',
-        'ad exchange match rate',
-        'ad exchange ad request ecpm ($)',
-        'ad exchange cpc ($)',
-        'ad exchange ctr',
-        'ad exchange active view % viewable impressions'
+        'ad exchange active view measurable impressions',
+        'ad exchange active view viewable impressions'
     ]
-    
     for coluna in metricas_numericas:
         if coluna in df.columns:
-            # Limpa e converte para numérico
-            df[coluna] = df[coluna].astype(str).str.replace('%', '').str.replace(',', '').str.strip()
-            df[coluna] = pd.to_numeric(df[coluna], errors='coerce')
-    
+            df[coluna] = pd.to_numeric(df[coluna], errors='coerce').fillna(0)
+    # Cálculo das métricas derivadas
+    df['CPC (US$)'] = (df['ad exchange revenue ($)'] / df['ad exchange clicks']).replace([np.inf, -np.inf], 0).fillna(0)
+    df['eCPM (US$)'] = (df['ad exchange revenue ($)'] / df['ad exchange impressions']).replace([np.inf, -np.inf], 0).fillna(0) * 1000
+    df['Match Rate (%)'] = (df['ad exchange impressions'] / df['ad exchange ad requests']).replace([np.inf, -np.inf], 0).fillna(0) * 100
+    df['CTR (%)'] = (df['ad exchange clicks'] / df['ad exchange impressions']).replace([np.inf, -np.inf], 0).fillna(0) * 100
+    df['Viewability (%)'] = (df['ad exchange active view viewable impressions'] / df['ad exchange active view measurable impressions']).replace([np.inf, -np.inf], 0).fillna(0) * 100
+    df['Ad Request eCPM (US$)'] = (df['ad exchange revenue ($)'] / df['ad exchange ad requests']).replace([np.inf, -np.inf], 0).fillna(0) * 1000
     # Remove linhas com dados inválidos críticos
     df = df.dropna(subset=['data', 'utm_source'])
     
@@ -101,19 +105,60 @@ def create_analysis_section(df, group_cols, metrics_config, title, key_prefix, m
 
     # Seletor de métrica para gráfico e crescimento
     if metricas_disponiveis is None:
-        metricas_disponiveis = list(metrics_config.keys())
-    default_metric = 'ad exchange ad requests' if 'ad exchange ad requests' in metricas_disponiveis else metricas_disponiveis[0]
+        if metrics_config is not None:
+            metricas_disponiveis = list(metrics_config.keys())
+        else:
+            # Inferir métricas numéricas do DataFrame
+            metricas_disponiveis = [col for col in df.columns if pd.api.types.is_numeric_dtype(df[col])]
+    default_metric = 'ad exchange ad requests' if 'ad exchange ad requests' in metricas_disponiveis else (metricas_disponiveis[0] if metricas_disponiveis else None)
     selected_metric = st.selectbox(
         f"Selecione a métrica para o gráfico e análise de crescimento:",
         options=metricas_disponiveis,
-        index=metricas_disponiveis.index(default_metric),
+        index=metricas_disponiveis.index(default_metric) if default_metric in metricas_disponiveis else 0,
         key=f"metric_growth_{key_prefix}"
     )
 
-    metrics = calculate_metrics_safely(df, group_cols, metrics_config)
+    # --- NOVO BLOCO: Agrupamento sempre com soma das bases e cálculo das derivadas ---
+    base_cols = [
+        'ad exchange impressions', 'ad exchange clicks', 'ad exchange revenue ($)',
+        'ad exchange ad requests', 'ad exchange active view measurable impressions',
+        'ad exchange active view viewable impressions'
+    ]
+    # Verifica se todas as colunas base existem no DataFrame
+    for col in base_cols:
+        if col not in df.columns:
+            df[col] = 0
+    # Agrupa pelas dimensões selecionadas
+    grouped = df.groupby(group_cols)[base_cols].sum().reset_index()
+    # Calcula as métricas derivadas
+    grouped = calcular_metricas_derivadas(grouped, group_cols)
+    # Seleciona as métricas para exibir (base + derivadas)
+    all_metrics = base_cols + ['CTR (%)', 'CPC (US$)', 'eCPM (US$)', 'Ad Request eCPM (US$)', 'Match Rate (%)']
+    # Filtra para mostrar apenas as métricas selecionadas pelo usuário (se houver)
+    if metrics_config:
+        selected_metrics = list(metrics_config.keys())
+        display_cols = group_cols + [m for m in all_metrics if m in selected_metrics or m in grouped.columns]
+    else:
+        display_cols = group_cols + all_metrics
+    metrics = grouped[display_cols]
+    # --- FIM NOVO BLOCO ---
     
     if not metrics.empty:
         st.write(f"**{title}:**")
+        
+        # --- NOVO BLOCO: Seletor de ordenação ---
+        order_options = [col for col in metrics.columns if col not in group_cols and pd.api.types.is_numeric_dtype(metrics[col])]
+        default_order = 'ad exchange ad requests' if 'ad exchange ad requests' in order_options else (order_options[0] if order_options else None)
+        order_by = st.selectbox(
+            'Ordenar tabela por:',
+            options=order_options,
+            index=order_options.index(default_order) if default_order in order_options else 0,
+            key=f"order_by_{key_prefix}"
+        ) if order_options else None
+        if order_by:
+            metrics = metrics.sort_values(order_by, ascending=False)
+            metrics = metrics.head(10)
+        # --- FIM NOVO BLOCO ---
         
         # Formatação da tabela
         format_dict = {}
@@ -122,16 +167,23 @@ def create_analysis_section(df, group_cols, metrics_config, title, key_prefix, m
                 if col == 'data':
                     format_dict[col] = lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else ''
                 continue  # Pula outras colunas de dimensão
-                
             if pd.api.types.is_numeric_dtype(metrics[col]):
-                if 'ad requests' in col.lower():
-                    format_dict[col] = "{:,.0f}"
-                elif any(x in col.lower() for x in ['rate', 'ctr', 'viewable']):
-                    format_dict[col] = "{:.2f}%"
-                elif any(x in col.lower() for x in ['ecpm', 'cpc', '$']):
-                    format_dict[col] = "US$ {:.2f}"
+                if any(x in col.lower() for x in ['ad requests', 'impressions', 'clicks']):
+                    format_dict[col] = '{:,.0f}'
+                elif any(x in col.lower() for x in ['rate', 'ctr', 'viewable', '%']):
+                    format_dict[col] = '{:.2f}%'
+                elif any(x in col.lower() for x in ['ecpm', 'cpc', '$', 'revenue']):
+                    format_dict[col] = 'US$ {:.2f}'
                 else:
-                    format_dict[col] = "{:.2f}"
+                    format_dict[col] = '{:.2f}'
+        
+        # Definir colunas de dimensão para fixar à esquerda
+        dimensoes_fixas = [col for col in group_cols if col in metrics.columns]
+        try:
+            import streamlit as stlib
+            column_config = {col: st.column_config.Column(label=col, pinned="left") for col in dimensoes_fixas}
+        except Exception:
+            column_config = None
         
         # Aplicar formatação apenas nas colunas numéricas
         styled_metrics = metrics.style.format(format_dict)
@@ -144,7 +196,11 @@ def create_analysis_section(df, group_cols, metrics_config, title, key_prefix, m
                 subset=numeric_cols
             )
         
-        st.dataframe(styled_metrics, use_container_width=True)
+        st.dataframe(
+            styled_metrics,
+            use_container_width=True,
+            column_config=column_config if column_config else None
+        )
         
         # Gráfico de evolução
         if selected_metric in df.columns:
@@ -156,35 +212,55 @@ def create_analysis_section(df, group_cols, metrics_config, title, key_prefix, m
             elif key_prefix == 'advertiser' and 'advertiser (classified)' in df.columns:
                 group_by_cols = ['data', 'advertiser (classified)']
                 color_col = 'advertiser (classified)'
-                
                 # Filtrar para os top 5 advertisers por total da métrica selecionada
                 top_advertisers = df.groupby('advertiser (classified)')[selected_metric].sum().nlargest(5).index
                 df_graph = df[df['advertiser (classified)'].isin(top_advertisers)].copy()
+            elif key_prefix == 'url' and 'url' in df.columns:
+                group_by_cols = ['data', 'url']
+                color_col = 'url'
+                # Filtrar para as TOP 10 URLs exibidas na tabela
+                top_urls = metrics['url'].unique() if 'url' in metrics.columns else []
+                df_graph = df[df['url'].isin(top_urls)].copy()
             else:
                 group_by_cols = ['data'] + [col for col in group_cols if col != 'data']
                 color_col = group_cols[1] if len(group_cols) > 1 else group_cols[0]
                 df_graph = df.copy()
-            
-            # Escolher agregação correta para a métrica selecionada
-            metricas_soma = [
-                'ad exchange ad requests',
-                'ad exchange revenue ($)'
+
+            # Métricas derivadas que precisam ser recalculadas a partir dos totais
+            metricas_derivadas = ['CPC (US$)', 'eCPM (US$)', 'CTR (%)', 'Ad Request eCPM (US$)', 'Match Rate (%)']
+            base_cols = [
+                'ad exchange impressions', 'ad exchange clicks', 'ad exchange revenue ($)',
+                'ad exchange ad requests', 'ad exchange active view measurable impressions',
+                'ad exchange active view viewable impressions'
             ]
-            if selected_metric.lower() in metricas_soma:
-                agg_func = 'sum'
+            if selected_metric in metricas_derivadas:
+                # Agrupar e somar as bases, depois calcular a métrica derivada
+                grouped_graph = df_graph.groupby(group_by_cols)[base_cols].sum().reset_index()
+                grouped_graph = calcular_metricas_derivadas(grouped_graph, group_by_cols)
+                trend = grouped_graph[group_by_cols + [selected_metric]]
             else:
-                agg_func = 'mean'
-            
-            trend = calculate_metrics_safely(
-                df_graph,
-                group_by_cols,
-                {selected_metric: agg_func}
-            )
-            
+                # Métricas base: pode usar soma ou média conforme apropriado
+                metricas_soma = [
+                    'ad exchange ad requests',
+                    'ad exchange revenue ($)',
+                    'ad exchange impressions',
+                    'ad exchange clicks',
+                    'ad exchange active view measurable impressions',
+                    'ad exchange active view viewable impressions'
+                ]
+                if selected_metric.lower() in metricas_soma:
+                    agg_func = 'sum'
+                else:
+                    agg_func = 'mean'
+                trend = calculate_metrics_safely(
+                    df_graph,
+                    group_by_cols,
+                    {selected_metric: agg_func}
+                )
+
             if not trend.empty:
                 # Configurar cores para melhor visualização
                 colors = px.colors.qualitative.Set3
-                
                 # Criar o gráfico
                 fig = px.line(
                     trend,
@@ -238,85 +314,56 @@ def create_analysis_section(df, group_cols, metrics_config, title, key_prefix, m
                 
                 st.plotly_chart(fig, use_container_width=True)
                 
-                # Adicionar métricas de crescimento
-                if len(trend['data'].unique()) > 1:
-                    st.subheader("📈 Análise de Crescimento")
-                    
-                    # Remover linhas de total se existirem
-                    if 'Grupo' in trend.columns and 'TOTAL GERAL' in trend['Grupo'].values:
-                        trend = trend[trend['Grupo'] != 'TOTAL GERAL']
-                    if color_col in trend.columns and 'TOTAL GERAL' in trend[color_col].values:
-                        trend = trend[trend[color_col] != 'TOTAL GERAL']
-                    
-                    # Calcular crescimento
-                    growth_data = []
-                    for group in trend[color_col].unique():
-                        group_data = trend[trend[color_col] == group].copy()
-                        # Só calcula crescimento se houver pelo menos 2 datas distintas
-                        if len(group_data['data'].unique()) > 1:
-                            group_data = group_data.sort_values('data')
-                            first_value = group_data[selected_metric].iloc[0]
-                            last_value = group_data[selected_metric].iloc[-1]
-                            growth_pct = ((last_value - first_value) / first_value) * 100 if first_value != 0 else 0
-                            
-                            # Adicionar informações específicas baseadas no tipo de análise
-                            growth_info = {
-                                'Grupo': group,
-                                'Valor Inicial': first_value,
-                                'Valor Final': last_value,
-                                'Crescimento Absoluto': last_value - first_value,
-                                'Crescimento %': growth_pct
-                            }
-                            
-                            # Adicionar advertiser se estiver na aba de advertiser
-                            if 'advertiser (classified)' in df.columns and key_prefix == 'advertiser':
-                                advertiser = df[df[color_col] == group]['advertiser (classified)'].iloc[0]
-                                growth_info['Advertiser'] = advertiser
-                            
-                            growth_data.append(growth_info)
-                    
-                    if growth_data:
-                        growth_df = pd.DataFrame(growth_data)
-                        
-                        # Reordenar colunas para mostrar Advertiser logo após o Grupo
-                        if 'Advertiser' in growth_df.columns:
-                            cols = growth_df.columns.tolist()
-                            cols.remove('Advertiser')
-                            cols.insert(1, 'Advertiser')
-                            growth_df = growth_df[cols]
-                        
-                        growth_df = growth_df.sort_values('Crescimento %', ascending=False)
-                        
-                        # Formatar tabela de crescimento
-                        format_dict = {
-                            'Valor Inicial': '{:,.2f}',
-                            'Valor Final': '{:,.2f}',
-                            'Crescimento Absoluto': '{:,.2f}',
-                            'Crescimento %': '{:+.2f}%'
-                        }
-                        
-                        growth_styled = growth_df.style.format(format_dict).background_gradient(
-                            subset=['Crescimento %'],
-                            cmap='RdYlGn'
-                        )
-                        
-                        st.dataframe(growth_styled, use_container_width=True)
+                # Análise de Crescimento SEMPRE aparece
+                st.subheader("📈 Análise de Crescimento")
+                growth_data = []
+                for group in trend[color_col].unique():
+                    group_data = trend[trend[color_col] == group].copy()
+                    group_data = group_data.sort_values('data')
+                    first_value = group_data[selected_metric].iloc[0]
+                    last_value = group_data[selected_metric].iloc[-1]
+                    growth_pct = ((last_value - first_value) / first_value) * 100 if first_value != 0 else 0
+                    growth_info = {
+                        'Grupo': group,
+                        'Valor Inicial': first_value,
+                        'Valor Final': last_value,
+                        'Crescimento Absoluto': last_value - first_value,
+                        'Crescimento %': growth_pct  # float, não string
+                    }
+                    growth_data.append(growth_info)
+                if growth_data:
+                    growth_df = pd.DataFrame(growth_data)
+                    growth_df = growth_df.sort_values('Crescimento %', ascending=False)
+                    format_dict = {
+                        'Valor Inicial': '{:,.2f}',
+                        'Valor Final': '{:,.2f}',
+                        'Crescimento Absoluto': '{:,.2f}',
+                        'Crescimento %': '{:+.2f}%'
+                    }
+                    growth_styled = growth_df.style.format(format_dict).background_gradient(
+                        subset=['Crescimento %'],
+                        cmap='RdYlGn'
+                    )
+                    st.dataframe(growth_styled, use_container_width=True)
         
         # Export
-        if st.button(f"📤 Exportar dados de {title}", key=f"export_{key_prefix}"):
+        if st.button(f"\U0001F4E4 Exportar dados de {title}", key=f"export_{key_prefix}"):
             export_cols = group_cols.copy()
-            export_cols.extend(metrics_config.keys())
-            
+            if metrics_config is not None:
+                export_cols.extend(metrics_config.keys())
+            else:
+                # Inferir métricas numéricas do DataFrame agrupado
+                export_cols.extend([col for col in metrics.columns if col not in group_cols])
             csv_data = metrics[export_cols].to_csv(index=False).encode('utf-8')
             st.download_button(
-                f"📥 Baixar CSV - {title}",
+                f"\U0001F4E5 Baixar CSV - {title}",
                 csv_data,
                 f"analise_{key_prefix}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                 "text/csv",
                 key=f"download_{key_prefix}"
             )
     else:
-        st.warning("⚠️ Nenhum dado encontrado com a configuração atual.")
+        st.warning("\u26A0\uFE0F Nenhum dado encontrado com a configuração atual.")
 
 def create_url_filter(df, key_prefix):
     """Cria um filtro de URLs"""
@@ -343,15 +390,6 @@ def create_dimension_selector(df, base_dims, key_prefix):
         key=f"dimensoes_{key_prefix}"
     )
 
-def create_metric_selector(metricas_disponiveis, key_prefix):
-    """Cria um seletor de métricas"""
-    return st.multiselect(
-        "Métricas para exibir:",
-        options=metricas_disponiveis,
-        default=metricas_disponiveis[:3],
-        key=f"metricas_{key_prefix}"
-    )
-
 def create_source_filter(df, key_prefix):
     """Cria um filtro de sources"""
     sources_disponiveis = sorted(df['utm_source'].dropna().unique())
@@ -361,6 +399,57 @@ def create_source_filter(df, key_prefix):
         default=sources_disponiveis[:5] if len(sources_disponiveis) <= 5 else sources_disponiveis[:3],
         key=f"source_filter_{key_prefix}"
     )
+
+# Função para calcular métricas derivadas a partir dos totais agrupados
+def calcular_metricas_derivadas(df, group_cols):
+    # Garante que todas as colunas base existem
+    for col in [
+        'ad exchange impressions', 'ad exchange clicks', 'ad exchange revenue ($)',
+        'ad exchange ad requests', 'ad exchange active view measurable impressions',
+        'ad exchange active view viewable impressions'
+    ]:
+        if col not in df.columns:
+            df[col] = 0
+    grouped = df.groupby(group_cols).agg({
+        'ad exchange impressions': 'sum',
+        'ad exchange clicks': 'sum',
+        'ad exchange revenue ($)': 'sum',
+        'ad exchange ad requests': 'sum',
+        'ad exchange active view measurable impressions': 'sum',
+        'ad exchange active view viewable impressions': 'sum'
+    }).reset_index()
+    # Converter colunas base para numérico após o agrupamento
+    for col in [
+        'ad exchange impressions', 'ad exchange clicks', 'ad exchange revenue ($)',
+        'ad exchange ad requests', 'ad exchange active view measurable impressions',
+        'ad exchange active view viewable impressions'
+    ]:
+        if col in grouped.columns:
+            grouped[col] = pd.to_numeric(grouped[col], errors='coerce').fillna(0)
+    # Métricas derivadas
+    grouped['CTR (%)'] = (grouped['ad exchange clicks'] / grouped['ad exchange impressions']).replace([np.inf, -np.inf], 0).fillna(0) * 100
+    grouped['CPC (US$)'] = (grouped['ad exchange revenue ($)'] / grouped['ad exchange clicks']).replace([np.inf, -np.inf], 0).fillna(0)
+    grouped['eCPM (US$)'] = (grouped['ad exchange revenue ($)'] / grouped['ad exchange impressions']).replace([np.inf, -np.inf], 0).fillna(0) * 1000
+    grouped['Ad Request eCPM (US$)'] = (grouped['ad exchange revenue ($)'] / grouped['ad exchange ad requests']).replace([np.inf, -np.inf], 0).fillna(0) * 1000
+    grouped['Match Rate (%)'] = (grouped['ad exchange impressions'] / grouped['ad exchange ad requests']).replace([np.inf, -np.inf], 0).fillna(0) * 100
+    return grouped
+
+# Bloco universal de formatação para todas as tabelas
+universal_format_dict = {}
+def build_format_dict(df):
+    format_dict = {}
+    for col in df.columns:
+        if pd.api.types.is_numeric_dtype(df[col]):
+            col_lower = col.lower()
+            if any(x in col_lower for x in ['ecpm', 'cpc', '$', 'revenue']):
+                format_dict[col] = 'US$ {:.2f}'
+            elif any(x in col_lower for x in ['rate', 'ctr', 'viewable', '%']):
+                format_dict[col] = '{:.2f}%'
+            elif any(x in col_lower for x in ['impressions', 'clicks', 'requests']):
+                format_dict[col] = '{:,.0f}'
+            else:
+                format_dict[col] = '{:.2f}'
+    return format_dict
 
 # Interface de upload
 uploaded_files = st.file_uploader(
@@ -383,7 +472,7 @@ if uploaded_files:
         # Fallback sem cache para desenvolvimento
         all_data = []
         for file in uploaded_files:
-            df = pd.read_csv(file)
+            df = pd.read_csv(file, thousands=',')
             df['source_file'] = os.path.basename(file.name)
             all_data.append(df)
         
@@ -391,26 +480,28 @@ if uploaded_files:
         
         # Padronização
         df_original.columns = [c.strip().lower() for c in df_original.columns]
-        df_original.rename(columns={'channel': 'utm_source', 'date': 'data'}, inplace=True)
+        df_original.rename(columns={'channel': 'utm_source', 'date': 'data', 'ad exchange active view viewable impression': 'ad exchange active view viewable impressions'}, inplace=True)
         df_original['data'] = pd.to_datetime(df_original['data'], errors='coerce')
         
         # Processamento numérico
         metricas_numericas = [
+            'ad exchange impressions',
+            'ad exchange clicks',
+            'ad exchange revenue ($)',
             'ad exchange ad requests',
-            'ad exchange match rate', 
-            'ad exchange ad request ecpm ($)',
-            'ad exchange cpc ($)',
-            'ad exchange ctr',
-            'ad exchange active view % viewable impressions'
+            'ad exchange active view measurable impressions',
+            'ad exchange active view viewable impressions'
         ]
-        
         for coluna in metricas_numericas:
             if coluna in df_original.columns:
-                df_original[coluna] = pd.to_numeric(
-                    df_original[coluna].astype(str).str.replace('%', '').str.replace(',', '').str.strip(),
-                    errors='coerce'
-                )
-        
+                df_original[coluna] = pd.to_numeric(df_original[coluna], errors='coerce').fillna(0)
+        # Cálculo das métricas derivadas
+        df_original['CPC (US$)'] = (df_original['ad exchange revenue ($)'] / df_original['ad exchange clicks']).replace([np.inf, -np.inf], 0).fillna(0)
+        df_original['eCPM (US$)'] = (df_original['ad exchange revenue ($)'] / df_original['ad exchange impressions']).replace([np.inf, -np.inf], 0).fillna(0) * 1000
+        df_original['Match Rate (%)'] = (df_original['ad exchange impressions'] / df_original['ad exchange ad requests']).replace([np.inf, -np.inf], 0).fillna(0) * 100
+        df_original['CTR (%)'] = (df_original['ad exchange clicks'] / df_original['ad exchange impressions']).replace([np.inf, -np.inf], 0).fillna(0) * 100
+        df_original['Viewability (%)'] = (df_original['ad exchange active view viewable impressions'] / df_original['ad exchange active view measurable impressions']).replace([np.inf, -np.inf], 0).fillna(0) * 100
+        df_original['Ad Request eCPM (US$)'] = (df_original['ad exchange revenue ($)'] / df_original['ad exchange ad requests']).replace([np.inf, -np.inf], 0).fillna(0) * 1000
         df_original = df_original.dropna(subset=['data', 'utm_source'])
     
     # Validação de colunas obrigatórias
@@ -538,25 +629,9 @@ if uploaded_files:
         consolidado_display = consolidado.rename(columns=display_columns)
         
         # Formatação
-        format_dict = {}
-        for col in consolidado_display.columns:
-            if col == 'utm_source':
-                continue  # Pula coluna de texto
-                
-            if pd.api.types.is_numeric_dtype(consolidado_display[col]):
-                if 'Ad Requests' in col:
-                    format_dict[col] = "{:,.0f}"
-                elif 'Match Rate (%)' in col or 'CTR (%)' in col or 'Viewability (%)' in col:
-                    format_dict[col] = "{:.2f}%"
-                elif 'eCPM (US$)' in col or 'CPC (US$)' in col:
-                    format_dict[col] = "US$ {:.2f}"
-                else:
-                    format_dict[col] = "{:.2f}"
+        format_dict = build_format_dict(consolidado_display)
         
-        st.dataframe(
-            consolidado_display.style.format(format_dict),
-            use_container_width=True
-        )
+        st.dataframe(consolidado_display.style.format(format_dict), use_container_width=True)
         
         # Gráfico de tendência
         if 'ad exchange ad requests' in df_filtered.columns:
@@ -588,200 +663,98 @@ if uploaded_files:
         if 'url' not in df_filtered.columns:
             st.warning("⚠️ Coluna 'URL' não encontrada nos dados.")
         else:
-            st.subheader("🔗 Análise por URL")
-            
-            # Top URLs por Ad Requests
-            if 'ad exchange ad requests' in df_filtered.columns:
-                top_urls_data = calculate_metrics_safely(
-                    df_filtered,
-                    ['url'],
-                    {'ad exchange ad requests': 'sum'}
-                )
-                
-                if not top_urls_data.empty:
-                    top_urls_data = top_urls_data.sort_values('ad exchange ad requests', ascending=False).head(20)
-                    
-                    st.write("**Top 20 URLs por Ad Requests:**")
-                    st.dataframe(
-                        top_urls_data.style.format({'ad exchange ad requests': "{:,.0f}"}),
-                        use_container_width=True
-                    )
-                    
-                    # Filtro de URLs para análise detalhada
-                    urls_para_analise = st.multiselect(
-                        "Selecione URLs para análise detalhada:",
-                        options=top_urls_data['url'].tolist(),
-                        default=top_urls_data['url'].head(3).tolist()
-                    )
-                    
-                    if urls_para_analise:
-                        df_urls = df_filtered[df_filtered['url'].isin(urls_para_analise)]
-                        
-                        # Métricas por URL e UTM Source
-                        url_metrics = calculate_metrics_safely(
-                            df_urls,
-                            ['url', 'utm_source'],
-                            {m: metricas_config[m] for m in metricas_disponiveis}
-                        )
-                        
-                        if not url_metrics.empty:
-                            st.subheader("📊 Métricas Detalhadas por URL")
-                            st.dataframe(url_metrics, use_container_width=True)
-                            
-                            # Gráfico de eCPM por URL
-                            if 'ad exchange ad request ecpm ($)' in url_metrics.columns:
-                                fig_ecpm = px.bar(
-                                    url_metrics,
-                                    x='url',
-                                    y='ad exchange ad request ecpm ($)',
-                                    color='utm_source',
-                                    title='eCPM por URL e UTM Source'
-                                )
-                                fig_ecpm.update_xaxes(tickangle=45)
-                                st.plotly_chart(fig_ecpm, use_container_width=True)
+            key_prefix = 'url'
+            # Filtros adicionais
+            selected_urls = create_url_filter(df_filtered, key_prefix=key_prefix)
+            selected_sources = create_source_filter(df_filtered, key_prefix=key_prefix)
+            base_dims = ['ad unit', 'utm_source'] if 'ad unit' in df_filtered.columns else ['utm_source']
+            group_cols = create_dimension_selector(df_filtered, base_dims=base_dims, key_prefix=key_prefix)
+            if 'url' not in group_cols:
+                group_cols = ['url'] + group_cols
+            additional_filters = {}
+            if selected_urls:
+                additional_filters['url'] = selected_urls
+            if selected_sources:
+                additional_filters['utm_source'] = selected_sources
+            df_tab = get_filtered_data(df_filtered, date_range, selected_sources, additional_filters)
+            create_analysis_section(
+                df_tab,
+                group_cols=group_cols,
+                metrics_config=None,
+                title='Métricas por URL',
+                key_prefix=key_prefix
+            )
     
     with tab3:
         if 'ad type' not in df_filtered.columns:
             st.warning("⚠️ Coluna 'Ad Type' não encontrada nos dados.")
         else:
-            st.subheader("📱 Análise por Ad Type")
-            
-            # Filtros
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                additional_url_filter = create_url_filter(df_filtered, "adtype")
-                selected_sources = create_source_filter(df_filtered, "adtype")
-            
-            with col2:
-                st.write("**Filtros Adicionais:**")
-                ad_types_disponiveis = sorted(df_filtered['ad type'].dropna().unique())
-                selected_ad_types = st.multiselect(
-                    "Ad Types:",
-                    options=ad_types_disponiveis,
-                    default=ad_types_disponiveis[:10] if len(ad_types_disponiveis) <= 10 else []
-                )
-            
-            # Aplicar filtros
+            key_prefix = 'adtype'
+            selected_sources = create_source_filter(df_filtered, key_prefix=key_prefix)
+            base_dims = ['ad type', 'utm_source']
+            group_cols = create_dimension_selector(df_filtered, base_dims=base_dims, key_prefix=key_prefix)
             additional_filters = {}
-            if additional_url_filter:
-                additional_filters['url'] = additional_url_filter
-            if selected_ad_types:
-                additional_filters['ad type'] = selected_ad_types
-            
-            df_adtype = get_filtered_data(df_filtered, date_range, selected_sources, additional_filters)
-            df_adtype = df_adtype[~df_adtype['ad type'].str.lower().str.contains('unmatched ad requests', na=False)]
-            
-            if not df_adtype.empty:
-                # Configuração
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    dimensoes = create_dimension_selector(df_adtype, ['ad type', 'utm_source'], "adtype")
-                
-                with col2:
-                    metricas = create_metric_selector(metricas_disponiveis, "adtype")
-                
-                if dimensoes and metricas:
-                    metrics_config = {m: metricas_config[m] for m in metricas}
-                    create_analysis_section(df_adtype, dimensoes, metrics_config, "Métricas por Ad Type", "adtype")
-            else:
-                st.info("ℹ️ Nenhum dado válido de Ad Type encontrado após filtros.")
+            if selected_sources:
+                additional_filters['utm_source'] = selected_sources
+            df_tab = get_filtered_data(df_filtered, date_range, selected_sources, additional_filters)
+            create_analysis_section(
+                df_tab,
+                group_cols=group_cols,
+                metrics_config=None,
+                title='Métricas por Ad Type',
+                key_prefix=key_prefix
+            )
     
     with tab4:
         if 'advertiser (classified)' not in df_filtered.columns:
             st.warning("⚠️ Coluna 'Advertiser (classified)' não encontrada nos dados.")
         else:
-            st.subheader("🏢 Análise por Advertiser")
-            
-            # Filtros
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                additional_url_filter = create_url_filter(df_filtered, "advertiser")
-                selected_sources = create_source_filter(df_filtered, "advertiser")
-            
-            with col2:
-                st.write("**Filtros Adicionais:**")
-                advertisers_disponiveis = sorted(df_filtered['advertiser (classified)'].dropna().unique())
-                selected_advertisers = st.multiselect(
-                    "Advertisers:",
-                    options=advertisers_disponiveis,
-                    default=advertisers_disponiveis[:10] if len(advertisers_disponiveis) <= 10 else []
-                )
-            
-            # Aplicar filtros
+            key_prefix = 'advertiser'
+            selected_sources = create_source_filter(df_filtered, key_prefix=key_prefix)
+            base_dims = ['advertiser (classified)', 'utm_source']
+            group_cols = create_dimension_selector(df_filtered, base_dims=base_dims, key_prefix=key_prefix)
             additional_filters = {}
-            if additional_url_filter:
-                additional_filters['url'] = additional_url_filter
-            if selected_advertisers:
-                additional_filters['advertiser (classified)'] = selected_advertisers
-            
-            df_adv = get_filtered_data(df_filtered, date_range, selected_sources, additional_filters)
-            df_adv = df_adv[~df_adv['advertiser (classified)'].str.lower().str.contains('unmatched ad requests', na=False)]
-            
-            if not df_adv.empty:
-                # Configuração
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    dimensoes = create_dimension_selector(df_adv, ['advertiser (classified)', 'utm_source'], "advertiser")
-                
-                with col2:
-                    metricas = create_metric_selector(metricas_disponiveis, "advertiser")
-                
-                if dimensoes and metricas:
-                    metrics_config = {m: metricas_config[m] for m in metricas}
-                    create_analysis_section(df_adv, dimensoes, metrics_config, "Métricas por Advertiser", "advertiser")
-            else:
-                st.info("ℹ️ Nenhum dado válido de Advertiser encontrado após filtros.")
+            if selected_sources:
+                additional_filters['utm_source'] = selected_sources
+            df_tab = get_filtered_data(df_filtered, date_range, selected_sources, additional_filters)
+            create_analysis_section(
+                df_tab,
+                group_cols=group_cols,
+                metrics_config=None,
+                title='Métricas por Advertiser',
+                key_prefix=key_prefix
+            )
     
     with tab5:
         if 'ad unit' not in df_filtered.columns:
             st.warning("⚠️ Coluna 'Ad Unit' não encontrada nos dados.")
         else:
-            st.subheader("📦 Análise por Ad Unit")
-            
-            # Filtros
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                additional_url_filter = create_url_filter(df_filtered, "adunit")
-                selected_sources = create_source_filter(df_filtered, "adunit")
-            
-            with col2:
-                st.write("**Filtros Adicionais:**")
-                ad_units_disponiveis = sorted(df_filtered['ad unit'].dropna().unique())
-                selected_ad_units = st.multiselect(
-                    "Ad Units:",
-                    options=ad_units_disponiveis,
-                    default=ad_units_disponiveis[:10] if len(ad_units_disponiveis) <= 10 else []
-                )
-            
-            # Aplicar filtros
+            key_prefix = 'adunit'
+            selected_urls = create_url_filter(df_filtered, key_prefix=key_prefix)
+            selected_sources = create_source_filter(df_filtered, key_prefix=key_prefix)
+            adunits_disponiveis = sorted(df_filtered['ad unit'].dropna().unique())
+            selected_adunits = st.multiselect(
+                "Filtrar por Ad Units:",
+                options=adunits_disponiveis,
+                key=f"adunit_filter_{key_prefix}"
+            )
+            base_dims = ['ad unit', 'utm_source']
+            group_cols = create_dimension_selector(df_filtered, base_dims=base_dims, key_prefix=key_prefix)
             additional_filters = {}
-            if additional_url_filter:
-                additional_filters['url'] = additional_url_filter
-            if selected_ad_units:
-                additional_filters['ad unit'] = selected_ad_units
-            
-            df_ad_unit = get_filtered_data(df_filtered, date_range, selected_sources, additional_filters)
-            
-            if not df_ad_unit.empty:
-                # Configuração
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    dimensoes = create_dimension_selector(df_ad_unit, ['ad unit', 'utm_source'], "adunit")
-                
-                with col2:
-                    metricas = create_metric_selector(metricas_disponiveis, "adunit")
-                
-                if dimensoes and metricas:
-                    metrics_config = {m: metricas_config[m] for m in metricas}
-                    create_analysis_section(df_ad_unit, dimensoes, metrics_config, "Métricas por Ad Unit", "adunit")
-            else:
-                st.info("ℹ️ Selecione Ad Units para visualizar os dados.")
+            if selected_urls:
+                additional_filters['url'] = selected_urls
+            if selected_adunits:
+                additional_filters['ad unit'] = selected_adunits
+            if selected_sources:
+                additional_filters['utm_source'] = selected_sources
+            df_tab = get_filtered_data(df_filtered, date_range, selected_sources, additional_filters)
+            create_analysis_section(
+                df_tab,
+                group_cols=group_cols,
+                metrics_config=None,
+                title='Métricas por Ad Unit',
+                key_prefix=key_prefix
+            )
     
     # Export geral
     st.header("⬇️ Exportar Dados")
