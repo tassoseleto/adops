@@ -5,6 +5,7 @@ import re
 import plotly.express as px
 from datetime import datetime
 import numpy as np
+import io
 
 st.set_page_config(layout="wide")
 st.title("📊 Analisador de Desempenho por utm_source (GAM) - Versão 3.0")
@@ -558,7 +559,7 @@ if uploaded_files:
         )
     
     with col2:
-        # Filtro de utm_source principal (simples)
+        # Filtro de utm_source original (multiselect simples)
         todas_sources = sorted(df_original['utm_source'].dropna().unique())
         selected_sources = st.multiselect(
             "🌐 Canais (utm_source):",
@@ -566,10 +567,9 @@ if uploaded_files:
             default=todas_sources[:5] if len(todas_sources) <= 5 else todas_sources[:3],
             key="source_filter_main"
         )
-    
-    if not selected_sources:
-        st.warning("⚠️ Selecione ao menos um canal para continuar a análise.")
-        st.stop()
+        if not selected_sources:
+            st.warning("⚠️ Selecione ao menos um canal para continuar a análise.")
+            st.stop()
     
     # Aplicar filtros principais
     df_filtered = get_filtered_data(df_original, date_range, selected_sources)
@@ -676,9 +676,6 @@ if uploaded_files:
                     height=400
                 )
                 st.plotly_chart(fig_url, use_container_width=True)
-
-        # Espaço para mais sugestões e gráficos
-        st.info("Adicione mais gráficos ou análises executivas conforme desejar!")
 
     with tab_source:
         st.subheader("📋 Consolidado por UTM Source")
@@ -863,23 +860,54 @@ else:
     st.info("👆 Faça upload dos arquivos CSV para começar a análise.")
     
     # Informações sobre o formato esperado
-    with st.expander("ℹ️ Formato de dados esperado"):
+    with st.expander("❗ Aprenda aqui qual relatório você precisa fazer no GAM"):
+        st.markdown("""
+        <span style='color:red; font-weight:bold;'>Baixe um exemplo de CSV com todas as colunas preenchidas para usar como referência:</span>
+        """, unsafe_allow_html=True)
+        exemplo_df = pd.DataFrame([
+            {
+                'Channel': 'utm_source_exemplo',
+                'Date': '2024-06-20',
+                'URL': 'https://exemplo.com',
+                'Ad Unit': 'adunit_exemplo',
+                'Ad Type': 'Banner',
+                'Advertiser (classified)': 'Anunciante Exemplo',
+                'Ad Exchange Ad Requests': 10000,
+                'Ad Exchange Impressions': 8000,
+                'Ad Exchange Clicks': 120,
+                'Ad Exchange Revenue ($)': 50.25,
+                'Ad Exchange Active View Measurable Impressions': 7000,
+                'Ad Exchange Active View Viewable Impressions': 4000
+            }
+        ])
+        csv_buffer = io.StringIO()
+        exemplo_df.to_csv(csv_buffer, index=False)
+        st.download_button(
+            label="📥 Baixar CSV de Exemplo",
+            data=csv_buffer.getvalue(),
+            file_name="exemplo_gam.csv",
+            mime="text/csv"
+        )
         st.write("""
         **Colunas obrigatórias:**
         - `Channel` ou `utm_source`: Canal de origem
         - `Date` ou `data`: Data do registro
-        
+
         **Colunas opcionais:**
         - `URL`: URL analisada
         - `Ad Unit`: Unidade de anúncio
         - `Ad Type`: Tipo de anúncio
         - `Advertiser (classified)`: Anunciante classificado
-        
-        **Métricas esperadas:**
+
+        **Métricas obrigatórias no CSV:**
         - `Ad Exchange Ad Requests`: Solicitações de anúncios
-        - `Ad Exchange Match Rate`: Taxa de correspondência
-        - `Ad Exchange Ad Request ECPM ($)`: eCPM por solicitação
-        - `Ad Exchange CPC ($)`: Custo por clique
-        - `Ad Exchange CTR`: Taxa de cliques
-        - `Ad Exchange Active View % Viewable Impressions`: Porcentagem de visualizações
+        - `Ad Exchange Impressions`: Impressões
+        - `Ad Exchange Clicks`: Cliques
+        - `Ad Exchange Revenue ($)`: Receita
+        - `Ad Exchange Active View Measurable Impressions`: Impressões mensuráveis
+        - `Ad Exchange Active View Viewable Impressions`: Impressões visíveis
+
+        **Métricas calculadas automaticamente pelo sistema:**
+        - eCPM, CPC, CTR, Match Rate, Viewability, Ad Request eCPM
+        (Essas métricas NÃO precisam estar no CSV, serão geradas pelo sistema)
         """)
