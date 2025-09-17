@@ -7,6 +7,170 @@ from datetime import datetime
 import numpy as np
 import io
 
+
+
+# === FUNÇÕES PARA RPS (RECEITA POR SESSÃO) ===
+
+def create_rps_calculator(df):
+    """
+    Cria interface para calcular RPS personalizado
+    """
+    st.subheader("🎯 Calculadora de RPS (Receita por Sessão)")
+    st.write("Configure manualmente quais URLs somar na receita e qual Ad Unit usar como 'sessão'")
+    
+    if 'url' not in df.columns or 'ad unit' not in df.columns:
+        st.error("Dados necessários (URL e Ad Unit) não encontrados para cálculo de RPS")
+        return
+    
+    # Filtros de data e source já aplicados no df
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**1. URLs para somar receita:**")
+        urls_disponiveis = sorted(df['url'].dropna().unique())
+        urls_receita = st.multiselect(
+            "Selecione URLs que contribuem para a receita:",
+            options=urls_disponiveis,
+            key="rps_urls_receita",
+            help="Receita será a soma dessas URLs"
+        )
+        
+        if urls_receita:
+            receita_preview = df[df['url'].isin(urls_receita)]['ad exchange revenue ($)'].sum()
+            st.metric("Receita Total Selecionada", f"US$ {receita_preview:,.2f}")
+    
+    with col2:
+        st.write("**2. Ad Unit para 'sessões':**")
+        
+        # Primeiro selecionar URL
+        url_sessao = st.selectbox(
+            "URL para contagem de sessões:",
+            options=urls_disponiveis,
+            key="rps_url_sessao"
+        )
+        
+        # Depois selecionar Ad Unit dessa URL
+        if url_sessao:
+            adunits_url = sorted(df[df['url'] == url_sessao]['ad unit'].dropna().unique())
+            adunit_sessao = st.selectbox(
+                f"Ad Unit de '{url_sessao}' para usar como sessão:",
+                options=adunits_url,
+                key="rps_adunit_sessao",
+                help="Ad Requests deste Ad Unit = 'Sessões'"
+            )
+            
+            if adunit_sessao:
+                sessoes_preview = df[
+                    (df['url'] == url_sessao) & 
+                    (df['ad unit'] == adunit_sessao)
+                ]['ad exchange ad requests'].sum()
+                st.metric("Total de 'Sessões'", f"{sessoes_preview:,.0f}")
+    
+    # Calcular RPS se tudo estiver selecionado
+    if urls_receita and url_sessao and 'adunit_sessao' in locals():
+        st.write("---")
+        
+        # Cálculo do RPS
+        receita_total = df[df['url'].isin(urls_receita)]['ad exchange revenue ($)'].sum()
+        sessoes_total = df[
+            (df['url'] == url_sessao) & 
+            (df['ad unit'] == adunit_sessao)
+        ]['ad exchange ad requests'].sum()
+        
+        if sessoes_total > 0:
+            rps = receita_total / sessoes_total
+            
+            # Exibir resultados
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Receita Total", f"US$ {receita_total:,.2f}")
+            col2.metric("Sessões (Ad Requests)", f"{sessoes_total:,.0f}")
+            col3.metric("RPS", f"US$ {rps:.4f}", help="Receita por Sessão")
+            
+            # Análise temporal do RPS
+            st.subheader("📈 Evolução do RPS")
+            
+            # Calcular RPS por dia
+            df_receita = df[df['url'].isin(urls_receita)].groupby('data')['ad exchange revenue ($)'].sum()
+            df_sessoes = df[
+                (df['url'] == url_sessao) & 
+                (df['ad unit'] == adunit_sessao)
+            ].groupby('data')['ad exchange ad requests'].sum()
+            
+            # Combinar dados
+            rps_daily = pd.DataFrame({
+                'data': df_receita.index,
+                'receita': df_receita.values,
+                'sessoes': df_sessoes.reindex(df_receita.index, fill_value=0).values
+            })
+            rps_daily['rps'] = rps_daily.apply(
+                lambda row: row['receita'] / row['sessoes'] if row['sessoes'] > 0 else 0, 
+                axis=1
+            )
+            
+            if not rps_daily.empty and rps_daily['rps'].sum() > 0:
+                # Gráfico de RPS ao longo do tempo
+                fig = px.line(
+                    rps_daily,
+                    x='data',
+                    y='rps',
+                    markers=True,
+                    title='Evolução Diária do RPS',
+                    labels={'rps': 'RPS (US$)', 'data': 'Data'}
+                )
+                fig.update_layout(
+                    yaxis_title='RPS (US$)',
+                    hovermode='x unified',
+                    template='plotly_white'
+                )
+                fig.update_traces(
+                    hovertemplate='<b>%{x|%d/%m/%Y}</b><br>' +
+                                'RPS: US$ %{y:.4f}<br>' +
+                                '<extra></extra>'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Tabela detalhada
+                st.subheader("📊 Detalhamento Diário")
+                rps_display = rps_daily.copy()
+                rps_display['data'] = rps_display['data'].dt.strftime('%d/%m/%Y')
+                
+                format_dict = {
+                    'receita': 'US$ {:.2f}',
+                    'sessoes': '{:,.0f}',
+                    'rps': 'US$ {:.4f}'
+                }
+                
+                st.dataframe(
+                    rps_display.style.format(format_dict).background_gradient(
+                        subset=['rps'], cmap='RdYlGn'
+                    ),
+                    use_container_width=True
+                )
+                
+                # Estatísticas do RPS
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("RPS Médio", f"US$ {rps_daily['rps'].mean():.4f}")
+                col2.metric("RPS Mediano", f"US$ {rps_daily['rps'].median():.4f}")
+                col3.metric("RPS Máximo", f"US$ {rps_daily['rps'].max():.4f}")
+                col4.metric("RPS Mínimo", f"US$ {rps_daily['rps'].min():.4f}")
+                
+                # Export RPS
+                if st.button("📤 Exportar dados RPS", key="export_rps"):
+                    csv_rps = rps_daily.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        "📥 Baixar CSV - RPS",
+                        csv_rps,
+                        f"rps_analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                        "text/csv",
+                        key="download_rps"
+                    )
+            else:
+                st.warning("Não há dados suficientes para análise temporal do RPS")
+        else:
+            st.error("Não foi possível calcular RPS: Total de sessões é zero")
+
+
+
 st.set_page_config(layout="wide")
 st.title("📊 Analisador de Desempenho por utm_source (GAM) - Versão 3.0")
 
@@ -581,13 +745,14 @@ if uploaded_files:
     # Abas de análise
     st.header("📊 Análises Detalhadas")
 
-    tab_geral, tab_source, tab_url, tab_adunit, tab_adtype, tab_advertiser = st.tabs([
+    tab_geral, tab_source, tab_url, tab_adunit, tab_adtype, tab_advertiser, tab_rps = st.tabs([
         "📊 Visão Geral",
-        "🌐 Source",
+        "🌐 Source", 
         "🔗 URL",
         "📦 Ad Unit",
         "📱 Ad Type",
-        "🏢 Advertiser"
+        "🏢 Advertiser",
+        "🎯 RPS"
     ])
 
     with tab_geral:
@@ -630,7 +795,7 @@ if uploaded_files:
             import plotly.graph_objects as go
             fig = go.Figure()
             fig.add_trace(go.Bar(x=df_trend['data'], y=df_trend['ad exchange revenue ($)'], name='Receita', yaxis='y1'))
-            fig.add_trace(go.Line(x=df_trend['data'], y=df_trend['eCPM (US$)'], name='eCPM', yaxis='y2', marker_color='orange'))
+            fig.add_trace(go.Scatter(x=df_trend['data'], y=df_trend['eCPM (US$)'], name='eCPM', yaxis='y2', marker_color='orange'))
             fig.update_layout(
                 xaxis_title='Data',
                 yaxis=dict(title='Receita (US$)', side='left', showgrid=False),
@@ -830,34 +995,38 @@ if uploaded_files:
                 key_prefix=key_prefix
             )
 
-    # Export geral
-    st.header("⬇️ Exportar Dados")
-    
-    export_columns = ['data', 'utm_source']
-    if 'url' in df_filtered.columns:
-        export_columns.append('url')
-    if 'ad unit' in df_filtered.columns:
-        export_columns.append('ad unit')
-    
-    export_columns.extend(metricas_disponiveis)
-    
-    export_df = df_filtered[export_columns].copy()
-    
-    # Informações do export
-    st.write(f"**Registros para export:** {len(export_df):,}")
-    st.write(f"**Período:** {export_df['data'].min().strftime('%d/%m/%Y')} a {export_df['data'].max().strftime('%d/%m/%Y')}")
-    
-    csv_export = export_df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        "📤 Baixar dados filtrados (CSV)",
-        csv_export,
-        f"analise_gam_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-        "text/csv",
-        use_container_width=True
-    )
+
+    with tab_rps:
+        create_rps_calculator(df_filtered)
+
+        # Export geral
+        st.header("⬇️ Exportar Dados")
+        
+        export_columns = ['data', 'utm_source']
+        if 'url' in df_filtered.columns:
+            export_columns.append('url')
+        if 'ad unit' in df_filtered.columns:
+            export_columns.append('ad unit')
+        
+        export_columns.extend(metricas_disponiveis)
+        
+        export_df = df_filtered[export_columns].copy()
+        
+        # Informações do export
+        st.write(f"**Registros para export:** {len(export_df):,}")
+        st.write(f"**Período:** {export_df['data'].min().strftime('%d/%m/%Y')} a {export_df['data'].max().strftime('%d/%m/%Y')}")
+        
+        csv_export = export_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            "�� Baixar dados filtrados (CSV)",
+            csv_export,
+            f"analise_gam_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            "text/csv",
+            use_container_width=True
+        )
 
 else:
-    st.info("👆 Faça upload dos arquivos CSV para começar a análise.")
+    st.info("�� Faça upload dos arquivos CSV para começar a análise.")
     
     # Informações sobre o formato esperado
     with st.expander("❗ Aprenda aqui qual relatório você precisa fazer no GAM"):
