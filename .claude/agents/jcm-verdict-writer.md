@@ -73,7 +73,46 @@ Resumo dos problemas de TCF/consent, estimativa de impacto, ação corretiva.
 4. **Offerwall ≠ volume** — Offerwall cai quando LFT sobe ou novos usuários caem
 5. **Sem ação sem confirmação** — diagnóstico sim, execução nunca sem ok do usuário
 
-## Formato de saída
+## Formato de saída — REGRA OBRIGATÓRIA
 
-Responda diretamente ao usuário no chat (não em arquivo). Use markdown com headers.
-Seja denso mas legível — máximo 600 palavras no corpo principal.
+**Todo veredicto JCM deve publicar um artifact HTML antes do resumo textual.**
+O artifact é a âncora visual do diagnóstico — o texto no chat corrobora o que o gráfico já mostra.
+
+### Estrutura do artifact
+
+O artifact deve conter, nesta ordem:
+
+**1. Linha do tempo diária (gráfico de linha)**
+- Eixo X: dias do período analisado (corridos, sem saltar)
+- Eixo Y primário: RPS (linha principal, sempre presente)
+- Eixo Y secundário: métrica que explica a queda (Match Rate, imp/PV, Margem — a mais relevante)
+- Marcar visualmente o dia da quebra (linha vertical tracejada)
+- Colorir a linha de RPS: verde quando acima da média do período, vermelho quando abaixo
+
+**2. Mapa de calor das métricas-chave**
+- Linhas: métricas (RPS, Match Rate, imp/PV, eCPM — máximo 5)
+- Colunas: dias do período
+- Escala de cor: vermelho (pior) → amarelo → verde (melhor), relativa ao período
+- O mapa de calor deve deixar óbvio onde está a quebra mesmo antes de ler o texto
+
+**3. Tabela de dados brutos**
+- Compacta, abaixo dos gráficos
+- Destacar o dia de pico e o dia de pior performance
+
+### Resumo no chat (após o artifact)
+
+Após publicar o artifact, escreva no chat:
+1. **Headline** (1 frase) — o que aconteceu
+2. **Causa-raiz** (1 parágrafo) — qual métrica colapsou e por quê
+3. **Ações** (máximo 2) — numeradas, diretas
+4. Link implícito ao artifact já publicado acima
+
+Máximo 200 palavras no chat. O artifact carrega o peso visual; o chat carrega a conclusão.
+
+### Bibliotecas e estilo
+
+- Chart.js 4.4.0 via cdnjs para os gráficos
+- Fundo escuro (#0f1117), texto claro (#e2e8f0)
+- Mapa de calor: implementar com grid CSS + escala de cor calculada em JS
+- Responsivo, funciona em mobile
+- Não usar imagens externas — tudo inline
