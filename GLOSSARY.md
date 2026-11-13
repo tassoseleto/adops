@@ -71,25 +71,6 @@ EPC = RPS (na maioria dos cenários)
 
 ---
 
-### LFT — Lifetime Frequency
-Perfil de frequência do usuário na fonte de tráfego.
-
-- **as_lft_sess:** frequência medida em sessões
-- **as_lft_pv:** frequência medida em pageviews
-
-**Interpretação:**
-- LFT baixo → maioria de usuários novos → Offerwall mais eficiente, demand mais fresca
-- LFT alto → audiência recorrente → menor RPMS, Offerwall menos eficiente
-
----
-
-### sess=0_2
-Primeiras 1-2 sessões de um usuário na fonte. Segmento mais valioso para Offerwall
-e para análise de qualidade de tráfego novo. Correlaciona diretamente com performance
-de produtos de aquisição.
-
----
-
 ### Fonte de tráfego
 Plataforma de compra de mídia. Exemplos canônicos: Taboola, Mgid, Outbrain,
 Facebook Ads, Google UAC. Nunca generalizar como "DSP" sem especificar a plataforma.
