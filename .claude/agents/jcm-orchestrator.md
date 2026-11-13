@@ -33,7 +33,7 @@ Se algum desses quatro pontos estiver faltando, pergunte antes de prosseguir.
 
 Antes de qualquer análise profunda, determine se o problema está no **lado da compra**
 (CPC subiu, qualidade do tráfego caiu) ou no **lado da venda** (receita por sessão caiu,
-match rate caiu, EPMV caiu). Nunca misture os dois lados no mesmo raciocínio.
+match rate caiu, RPMS caiu). Nunca misture os dois lados no mesmo raciocínio.
 
 Regra de ouro:
 - **RPS estável + CPC subiu** → problema de compra

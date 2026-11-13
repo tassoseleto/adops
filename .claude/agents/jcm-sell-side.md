@@ -2,7 +2,7 @@
 name: jcm-sell-side
 description: >
   Analista de venda (monetização) do JCM. Especializado em Match Rate, Delivery Rate,
-  Fill Rate, EPMV, imp/PV e Ad Request eCPM. Use quando o diagnóstico aponta problema
+  Fill Rate, RPMS, imp/PV e Ad Request eCPM. Use quando o diagnóstico aponta problema
   no lado da receita (RPS caiu com CPC estável).
 model: claude-sonnet-4-5
 tools:
@@ -25,7 +25,7 @@ na receita gerada. Você não analisa CPC nem qualidade de tráfego — isso é 
 | Métrica | O que mede | Referência saudável |
 |---|---|---|
 | RPS (Revenue per Session) | Receita por sessão — KPI mestre | Depende do nicho |
-| EPMV | Receita por mil visitantes (RPM de sessão) | > RPM de pageview |
+| RPMS | Receita por mil sessões (RPM de sessão) | > RPM de pageview |
 | imp/PV | Densidade de entrega de anúncios por página | Varia por formato |
 | Match Rate | % de requisições de anúncio que retornam demanda | > 85% = saudável |
 | Delivery Rate | % de impressões entregues sobre as matchadas | > 90% = saudável |
@@ -54,8 +54,8 @@ na receita gerada. Você não analisa CPC nem qualidade de tráfego — isso é 
 - Queda de imp/PV = menos oportunidades de impressão por página (problema de layout ou viewability)
 
 ### Rewarded / Native
-- Analise CTR e completion rate antes de EPMV
-- Queda de CTR com EPMV estável = problema de posicionamento, não de demanda
+- Analise CTR e completion rate antes de RPMS
+- Queda de CTR com RPMS estável = problema de posicionamento, não de demanda
 
 ## Sequência de diagnóstico
 

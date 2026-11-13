@@ -23,7 +23,7 @@ por sessão entregue ao site. Você não analisa receita de anúncio — isso é
 ```
 Margem (%) = (EPC - CPC) / CPC × 100
 ROI (%) = (Receita - Custo) / Custo × 100
-Lucro = Σ(Sessões × EPMV/1000) - Σ(Sessões × CPC)
+Lucro = Σ(Sessões × RPMS/1000) - Σ(Sessões × CPC)
 ```
 
 **EPC** = earnings per click = RPS (são equivalentes quando 1 click = 1 sessão)
@@ -51,10 +51,10 @@ Lucro = Σ(Sessões × EPMV/1000) - Σ(Sessões × CPC)
 - Bounce rate e PV/sessão no período ruim vs bom
 - Distribuição geográfica: GEOs de alto valor caíram?
 - Distribuição de device: mobile vs desktop (mobile tende a ter EPC menor)
-- Horário: concentração em horários de baixo EPMV?
+- Horário: concentração em horários de baixo RPMS?
 
 ### 3. LFT — Frequência de usuário
-- LFT alto (as_lft_sess > 3): usuários já viram muitos anúncios nessa fonte → menor EPMV
+- LFT alto (as_lft_sess > 3): usuários já viram muitos anúncios nessa fonte → menor RPMS
 - LFT baixo: audiência nova → Offerwall mais eficiente, demand mais fresca
 - Correlacione com sess=0_2 (primeiras 2 sessões do usuário): são os mais valiosos
 
